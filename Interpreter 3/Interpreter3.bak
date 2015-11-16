@@ -1,0 +1,319 @@
+;Interpreter Project Part 3
+
+;Jeff Wagner jpw72
+
+;and Daniel McKinnon dnm30
+
+
+(load "simpleParser.scm")
+
+;main function
+(define interpret
+  (lambda (filename)
+    (wrapper (solve (parser filename) (intitalState) (lambda (v) v) (lambda (v) v)))))
+
+;evaluation function
+(define solve
+  (lambda (expression state continue break)
+    (cond
+      ((not (list? state)) state)
+      ((null? expression) state)
+      (else (solve (cdr expression) (mStateAll (car expression) state continue break) continue break)))))
+
+
+;boolean wrapper, changes #t to true, #f to false, or does nothing
+(define wrapper
+  (lambda (bool)
+    (cond
+      ((eq? bool #t) 'true)
+      ((eq? bool #f) 'false)
+      (else bool))))
+
+
+
+;/////////state and layer stuff//////////
+
+;initial state
+(define intitalState 
+  (lambda ()
+    (cons (emptyLayer) '())))
+
+;empty layer template
+(define emptyLayer 
+  (lambda ()
+    '(() ())))
+
+;add a layer
+(define addLayer
+  (lambda (state)
+    (cons (emptyLayer) state)))
+
+;remove layer
+(define removeLayer
+  (lambda (state)
+    (cdr state)))
+
+;head of state
+(define obama
+  (lambda (state)
+    (car state)))
+
+;name list of state
+(define nameList
+  (lambda (state)
+    (car state)))
+
+;value list of state
+(define valueList
+  (lambda (state)
+    (cadr state)))
+
+
+;//////////State management//////////
+
+;add 
+(define add
+  (lambda (name value state)
+    (cons (cons (cons name (nameList (obama state))) (cons (cons value (valueList (obama state))) '())) (cdr state))))
+
+;adds to ao specific layer
+(define addToLayer
+  (lambda (name value layer)
+    (cons (cons name (nameList layer)) (cons (cons value (valueList layer)) '()))))
+
+    
+;/////////////////////////////change some of this stuff, its exactly the same///////////////////////////////////////
+;update
+(define update
+  (lambda (name value state)
+    (update2 name value state (lambda (v) v))))
+  
+;update2
+(define update2
+  (lambda (name value state return)
+    (if (inLayer? name (obama state))
+        (return (cons (updateLayer name value (obama state)) (removeLayer state)))
+        (update2 name value (removeLayer state) (lambda (v) (return (cons (obama state) v)))))))
+
+;updateLayer
+(define updateLayer
+  (lambda (name value layer)
+    (addToLayer name value (removeFromLayer name layer))))
+
+
+;remove from layer
+(define removeFromLayer
+  (lambda (name layer)
+    (cond
+      ((null? (car layer)) '())
+      ((eq? name (car (car layer))) (incLayer layer))
+      (else (addToLayer (car (car layer)) (car (cadr layer)) (removeFromLayer name (incLayer layer)))))))
+
+
+;checks if variable is in the layer
+(define inLayer?
+  (lambda (name layer)
+    (cond
+      ((null? (car layer)) #f)
+      ((eq? name (car (car layer))) #t)
+      (else (inLayer? name (incLayer layer))))))
+    
+;increments the layer to the next one
+(define incLayer
+  (lambda (layer)
+    (cons (cdr (car layer)) (cons (cdr (cadr layer)) '()))))
+  
+;looks up value for designated variable
+(define lookUpValue
+  (lambda (name state)
+    (if (null? state)
+        (error "variable not declared")
+        ((lambda (v)
+           (if (null? v)
+               (lookUpValue name (removeLayer state))
+               v))
+         (lookUpInLayer name (obama state))))))
+
+;lookUpInLayer
+(define lookUpInLayer
+  (lambda (name layer)
+    (cond
+      ((null? (nameList layer)) '())
+      ((and (eq? name (car (car layer))) (null? (car (cadr layer)))) (error "variable not initialized"))
+      ((eq? name (car (car layer))) (car (cadr layer)))
+      (else (lookUpInLayer name (incLayer layer))))))
+
+
+
+;//////////Mstate stuff///////////
+
+;mStateAll feeds to the other mStste functions
+;mStateAll
+(define mStateAll
+  (lambda (expression state continue break)
+    (cond
+      ((null? expression) state)
+      ((list? (car expression)) (mStateAll (car expression)  state))
+      ((eq? (car expression) 'begin) (mStateBlock expression state continue break))
+      ((eq? (car expression) 'var) (mStateDeclare expression state))
+      ((eq? (operator expression) '=) (mStateAssign expression state))
+      ((eq? (car expression) 'return) (mStateReturn expression state))
+      ((eq? (car expression) 'if) (mStateIf expression state continue break))
+      ((eq? (car expression) 'while) (mStateWhile expression state))
+      ((eq? (car expression) 'break) (mStateBreak state break))
+      ((eq? (car expression) 'continue) (mStateContinue state continue))
+      (else (error "invalid expression")))))
+
+
+
+
+;mStateAssign
+(define mStateAssign
+  (lambda (expression state)
+    (if (included? (cadr expression) state)
+        (update (cadr expression) (mValueAll (caddr expression) state) state)
+        (error "undeclared variable"))))
+
+
+;our old mState assign
+;(define mStateAssign
+;  (lambda (expression state)
+;   (cond
+;     ((not (included? (leftoperand expression) state)) (error "Variable not declared"))
+;     (else(add (leftoperand expression) (mValueAll (rightoperand expression) state) state)))))
+
+;mStateReturn
+(define mStateReturn
+  (lambda (expression state)
+    (cond
+      ((boolean? (mValueBoolean (car (cdr expression)) state)) (mValueBoolean (car (cdr expression)) state))
+      ((number? (mValueAll (car (cdr expression)) state)) (mValueAll(car (cdr expression)) state))
+      (else (mValueAll (car (cdr expression)) state)))))
+
+;mStateDeclare
+(define mStateDeclare
+  (lambda (expression state)
+    (cond 
+      ((null? (cdr (cdr expression))) (add (cadr expression) '() state))
+      ((included? (cadr expression) state) (error "Variable already defined"))
+      ((eq? (caddr expression) '=) (add (cadr expression)) (cdddr expression) state)
+      (else (add (cadr expression) (mValueAll (caddr expression) state) state)))))
+
+;mStateIf
+(define mStateIf
+  (lambda (expression state continue break)
+    (cond
+      ((mValueBoolean (ifCondition expression) state) (mStateAll (stmt1 expression) state continue break))
+      ((else? expression) state)
+      (else (mStateAll (stmt2 expression) state continue break)))))
+
+(define ifCondition
+  (lambda (l)
+    (cadr l)))
+
+(define stmt1
+  (lambda (l)
+    (caddr l)))
+
+(define stmt2
+  (lambda (l)
+    (cadddr l)))
+
+(define else?
+  (lambda (l)
+    (null? (cdddr l))))
+
+;mStateWhile
+(define mStateWhile
+  (lambda (expression state)
+    (call/cc (lambda (break)
+               (letrec ((loop (lambda (whileCondition stmt state)
+                                (if (mValueBoolean whileCondition state)
+                                    (loop whileCondition stmt (call/cc (lambda (continue) (mStateAll stmt state continue break))))
+                                    state))))
+                 (loop (whileCondition expression) (stmt expression) state))))))
+
+(define whileCondition
+  (lambda (while)
+    (cadr while)))
+
+(define stmt
+  (lambda (while)
+    (caddr while)))
+
+;mStateBlock
+(define mStateBlock
+  (lambda (expression state continue break)
+    (removeLayer (solve (cdr expression) (addLayer state) (lambda (v) (continue (removeLayer v))) (lambda (v) (break (removeLayer v)))))))
+
+
+;mStateBreak
+(define mStateBreak
+  (lambda (state break)
+    (break state)))
+
+;mStateContinue
+(define mStateContinue
+  (lambda (state continue)
+    (continue state)))
+
+
+;/////////Mvalue stuff//////////
+
+;mValue
+;checks arithmetic operators first, if not then passes to mBoolean
+(define mValueAll
+  (lambda (expression state)
+    (cond
+      ((number? expression) expression)
+      ((not (list? expression)) (lookUpValue expression state));get variables
+      ((and (eq? '- (operator expression)) (null? (cddr expression))) (- 0 (mValueAll (leftoperand expression) state)))
+      ((eq? '+ (operator expression)) (+ (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '- (operator expression)) (- (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '* (operator expression)) (* (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '/ (operator expression)) (/ (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '% (operator expression)) (modulo (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))   
+      (else (mValueBoolean expression state)))))
+
+;mBoolean
+;evaluated boolean expression
+(define mValueBoolean
+  (lambda (expression state)
+    (cond
+      ((eq? 'true expression) #t)
+      ((eq? 'false expression) #f)
+      ((boolean? expression) expression)
+      ((number? expression) '(invalid))
+      ((not (list? expression)) (mValueAll expression state))
+      ((eq? '&& (operator expression)) (and (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '! (car expression)) (not (mValueAll (cadr expression) state)))
+      ((eq? '|| (operator expression)) (or (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '== (operator expression)) (equal? (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '!= (operator expression)) (not (equal? (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state))))
+      ((eq? '>= (operator expression)) (>= (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '<= (operator expression)) (<= (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '< (operator expression)) (< (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      ((eq? '> (operator expression)) (> (mValueAll (leftoperand expression) state) (mValueAll (rightoperand expression) state)))
+      (else '(invalid)))))
+
+;////////////general helpers/////////////
+(define operator car)
+(define leftoperand cadr)
+(define rightoperand caddr)
+
+
+;checks if the value is included in the state
+(define included?
+  (lambda (name state)
+    (if (null? state)
+        #f
+        ((lambda (value)
+          (if value
+              value
+              (included? name (removeLayer state))))
+         (inLayer? name (obama state))))))
+  
+;Used to test for if something is an atom
+(define (atom? x) (not (or (pair? x) (null? x))))
+
+

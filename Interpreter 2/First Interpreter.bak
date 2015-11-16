@@ -1,0 +1,140 @@
+(load "simpleParser.scm")
+
+(define interpret
+  (lambda (filename)
+    (mStateAll (parser filename) intitalState)))
+
+(define intitalState '())
+
+;helper functions to make reading code easier
+;arithmatatic functions
+(define operator car)
+(define leftoperand cadr)
+(define rightoperand caddr)
+      
+;assignment functions
+(define name cadr)
+(define value cadddr)
+      
+;if function
+(define nestedIf caadr)
+(define conditional cadr)
+(define stmt1 caddr)
+(define stmt2 cadddr)
+
+;mStateAll
+(define mStateAll
+  (lambda (expression state)
+    (cond
+      ((list? (car expression)) (mStateAll (cdr expression) (mStateAll (car expression) state)))
+      ((eq? (car expression) 'var) (mStateDeclare expression state))
+      ((eq? (operator expression) '=) (mStateAssign expression state))
+      ((eq? (car expression) 'return) (mStateReturn expression state))
+      ((eq? (car expression) 'if) (mStateIf expression state))
+      (else (mValueAll expression state)))));(error "There is some error in here. Teacher said we don't need to error check, so I left this for you instead")))))
+
+;MStateDeclare: Takes an expression that represents a variable declaration and a state 
+;var variable 
+;var variable value
+(define mStateDeclare
+  (lambda (expression state)
+    (cond 
+      ((null? (cdr (cdr expression))) (add (name expression) '() state))
+      ((eq? (cadr expression) '=) (add (name expression) (value expression) state))
+      (else (add (name expression) (mValueAll (caddr expression) state) state)))))
+
+;mStateAssign
+;(mStateAssign '(x = 10) '((x 11)))
+(define mStateAssign
+  (lambda (expression state)
+   (add (leftoperand expression) (rightoperand expression) state)))
+
+;mStateReturn
+(define mStateReturn
+  (lambda (expression state)
+    (mValueAll (cdr expression) state)))
+
+;mStateIf (if (conditional) then-statement optional-else-statement)
+(define mStateIf
+  (lambda (expression state)
+    (cond
+      ;((mValueBoolean (conditional expression) state) (mValueAll (stmt1 expression) state))
+      ((null? (cdddr expression)) state)
+      ((eq? 'if (car expression)) (mStateIf (cadr expression) state))
+      (else (mValueAll (stmt2 expression) state)))))
+
+;mValueAll
+(define mValueAll
+  (lambda (expression state)
+    (cond
+      ((boolean? (mValueBoolean expression state)) (mValueBoolean expression state))
+      (else (mValueArithmatic expression state)))))
+
+;mValueArithmatic: Takes an expression and a state and returns the value of the expression
+;(mValueArithmatic '(2 + 2) '((x 2)))
+;(mValueArithmatic '(2 + x) '((x 2)))
+;(mValueArithmatic 'x '((x true)))
+;(mValueArithmatic 'true '((x 2)))
+(define mValueArithmatic
+  (lambda (expression state)
+    (cond
+      ((number? expression) expression)
+      ((or (eq? 'true expression) (eq? 'true (lookUpValue expression state))) 'true)
+      ((or (eq? 'false expression) (eq? 'false (lookUpValue expression state))) 'false)
+      ((not (list? expression)) (lookUpValue expression state));get variables
+      ;((eq? '- (car expression)) (* -1 (mValueArithmatic (cdr expression) state)))
+      ((eq? '+ (operator expression)) (+ (mValueArithmatic (leftoperand expression) state) (mValueArithmatic (rightoperand expression) state)))
+      ((eq? '- (operator expression)) (- (mValueArithmatic (leftoperand expression) state) (mValueArithmatic (rightoperand expression) state)))
+      ((eq? '* (operator expression)) (* (mValueArithmatic (leftoperand expression) state) (mValueArithmatic (rightoperand expression) state)))
+      ((eq? '/ (operator expression)) (/ (mValueArithmatic (leftoperand expression) state) (mValueArithmatic (rightoperand expression) state)))
+      ((eq? '% (operator expression)) (% (mValueArithmatic (leftoperand expression) state) (mValueArithmatic (rightoperand expression) state)))
+      (else (error "Unknown operator")))))
+
+;mValueBoolean
+;(mValueBoolean '(true && true) '())
+;(mValueBoolean '(! true) '())
+;(mValueBoolean '(! (! true)) '())
+;(mValueBoolean '(true == true) '())
+;(mValueBoolean '(false != true) '())
+;(mValueBoolean '(4 <= 5) '())
+;(mValueBoolean '(4 >= 5) '())
+;(mValueBoolean '(4 < 5) '())
+;(mValueBoolean '(4 > 5) '())
+(define mValueBoolean
+  (lambda (expression state)
+    (cond
+      ((not (list? expression)) (mValueArithmatic expression state))
+      ((eq? '&& (operator expression)) (and (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state)))
+      ((eq? '! (car expression)) (not (mValueBoolean (cadr expression) state)))
+      ((eq? '|| (operator expression)) (or (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state)))
+      ((eq? '== (operator expression)) (equal? (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state)))
+      ((eq? '!= (operator expression)) (not (equal? (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state))))
+      ((eq? '>= (operator expression)) (>= (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state)))
+      ((eq? '<= (operator expression)) (<= (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state)))
+      ((eq? '< (operator expression)) (< (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state)))
+      ((eq? '> (operator expression)) (> (mValueBoolean (leftoperand expression) state) (mValueBoolean (rightoperand expression) state)))
+      (else (mValueArithmatic expression state)))))
+
+;Add: returns a new state 
+(define add
+  (lambda (name value state)
+    (cond
+      ((null? name) (error "You are missing a name"))
+      (else (cons (cons name (cons value '())) (removeBinding name state))))))
+
+;Remove: takes a name and a state. Returns the state if there is no matching name. If the name is found then returns a new state with the binding removed
+(define removeBinding
+  (lambda (name state)
+    (cond
+      ((null? state) '())
+      ((eq? name (car (car state))) (cdr state))
+      (else (cons (car state) (remove name (cdr state)))))))
+
+;lookUpValue: returns the value of the name that is linked to the binding
+(define lookUpValue
+  (lambda (name state)
+    (cond
+      ((null? state) null)  
+      ((number? name) name)
+      ((eq? name (caar state)) (car (cdr (car state))))
+      (else (lookUpValue name (cdr state))))))
